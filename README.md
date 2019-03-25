@@ -1,6 +1,6 @@
 # snapshot
 
-**THIS TOO IS ONLY A PROOF OF CONCEPT! DO NOT STORE ANYTHING IMPORTANT IN IT!**
+**THIS TOOL IS ONLY A PROOF OF CONCEPT! DO NOT STORE ANYTHING IMPORTANT IN IT!**
 
 ## What is this?
 
@@ -144,11 +144,12 @@ but the blocks themselves are ordered from last to first:
 +-------|-------|-------+
 ```
 
-The reason for this is that, while the file is read from top to bottom, blocks
+The reason for this is that while the file is read from top to bottom, blocks
 are created by prepending them to the chain of file blocks, like when you CAR
-additional items onto a list in Lisp. Since the blocks are read-only, we can't
-go back in and update the pointers of an already stored file block once we know
-what its next pointer will be.
+additional items onto the head of a list in Lisp. Since the blocks cannot be
+changed after persisting them to the block pool, we can't go back in and update
+the pointers of an already stored file block once we know what its next pointer
+will be.
 
 ### Commit Data Blocks
 
