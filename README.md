@@ -101,6 +101,8 @@ this list.
   
 - In any case where non-hash strings are allowed (only file paths and tag names
   currently), those strings are stored zero-padded and encoded as UTF-8.
+  
+- Integers are stored in binary, most significant byte first.
 
 ### Data Blocks
 
