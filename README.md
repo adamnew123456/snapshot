@@ -214,7 +214,7 @@ names into snapshot native addresses.
 
 Although this is an index of a kind, it isn't the central kind of index used in
 a snapshot, which maps addresses into concrete offsets in the snapshot file.
-That mapping is managed by the index file.
+That mapping is managed by index blocks.
 
 ### Index Blocks
 
@@ -246,7 +246,7 @@ There are two big questions that come to mind with this structure:
   loaded.
   
 - *How can I find the first index block?* The first index block is always a part
-  of the header, to avoid this problem (among others).
+  of the header to avoid this problem (among others).
 
 ### The Header Block
 
@@ -274,7 +274,7 @@ to keep them open is to store them outside of the main block pool. When they get
 filled, they can be flushed to the block pool since they can't fit any more
 data.
 
-Commits are the one exception, since (as mentioned before) commits use an
-inefficient storage mechanism by design so that they can be easily addressed.
-That's why its useful to store only the address of the most recent commit,
-instead of keeping the most recent block of them in the header.
+Commits are the one exception, since (as mentioned before or altered) commits
+use an inefficient storage mechanism by design so that they can be easily
+addressed. That's why its useful to store only the address of the most recent
+commit, instead of keeping the most recent block of them in the header.
