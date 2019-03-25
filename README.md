@@ -93,6 +93,15 @@ A snapshot file makes use of 6 kinds of blocks, not including the header. Since
 a header is based upon the other types of blocks, it's included at the end of
 this list.
 
+### General Notes On Storage
+
+- An address is stored in ASCII hex form, taking up a total of 64 bytes.
+  Although snapshot can deal with addresses in upper and lower case, all
+  addresses are internall stored as upper-case.
+  
+- In any case where non-hash strings are allowed (only file paths and tag names
+  currently), those strings are stored zero-padded and encoded as UTF-8.
+
 ### Data Blocks
 
 Data blocks are the simplest kind of block, which contain 64 KB of arbitrary
@@ -133,6 +142,12 @@ but the blocks themselves are ordered from last to first:
 +-------|-------|-------+
 ```
 
+The reason for this is that, while the file is read from top to bottom, blocks
+are created by prepending them to the chain of file blocks, like when you CAR
+additional items onto a list in Lisp. Since the blocks are read-only, we can't
+go back in and update the pointers of an already stored file block once we know
+what its next pointer will be.
+
 ### Commit Data Blocks
 
 ```text
@@ -148,18 +163,15 @@ but the blocks themselves are ordered from last to first:
 
 Commit data blocks contain references to all the files included in a commit.
 
-One important note is that the path (like all user-provided strings) are encoded
-as UTF-8, and are zero padded to fill up the field containing them. They're also
-relative to the directory the snapshot is of, so that you have a tree like this:
+One note about the paths: they're relative to the directory the snapshot is of,
+so that you have a tree like this and take a snapshot of a/, then the paths in
+the snapshot will be "b/c", "d" and "e":
 
 - a/
   - b/
     - c
   - d
   - e
-  
-And take a snapshot of a/, then the paths in the snapshot will be "b/c", "d" and
-"e".
 
 Also, like Git, directories are not tracked as separate entities. Snapshot knows
 to create them when restoring a snapshot, but otherwise they exist only in paths.
