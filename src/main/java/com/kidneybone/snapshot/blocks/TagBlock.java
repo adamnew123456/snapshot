@@ -12,7 +12,7 @@ import java.util.ArrayList;
 
 public class TagBlock extends BasicBlock {
     public static final int ENCODED_TAG_SIZE = HASH_SIZE_BYTES;
-    public static final int ENTRIES_PER_BLOCK = (BLOCK_SIZE_BYTES - HASH_SIZE_BYTES) / (HASH_SIZE_BYTES * 2);
+    public static final int ENTRIES_PER_BLOCK = (BLOCK_SIZE_BYTES - HASH_SIZE_BYTES) / (ENCODED_TAG_SIZE + HASH_SIZE_BYTES);
     private ArrayList<String> _names = new ArrayList<String>();
     private ArrayList<String> _pointers = new ArrayList<String>();
     private String _nextBlock;

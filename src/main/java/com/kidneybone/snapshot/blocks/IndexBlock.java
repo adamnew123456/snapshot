@@ -9,7 +9,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 
 public class IndexBlock extends BasicBlock {
-    public static final int ENTRIES_PER_BLOCK = (BLOCK_SIZE_BYTES - HASH_SIZE_BYTES) / (HASH_SIZE_BYTES * 3);
+    public static final int ENTRIES_PER_BLOCK = (BLOCK_SIZE_BYTES - HASH_SIZE_BYTES) / (HASH_SIZE_BYTES + 8 + 4 + 4);
     private ArrayList<String> _pointers = new ArrayList<String>();
     private ArrayList<Long> _offsets = new ArrayList<Long>();
     private ArrayList<Integer> _sizes = new ArrayList<Integer>();
