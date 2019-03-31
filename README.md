@@ -62,23 +62,17 @@ determine where things are stored. Instead of taking that hash and mapping it to
 a directory stored on an ext4 or NTFS volume, snapshots have their own internal
 indexes which let them map content addresses to offsets.
 
-This also means that snapshots are naturally deduplicated - since a block's
-address is just its contents, it's easy to avoid writing the same information in
-multiple places.
+snapshots have two forms of deduplication: one comes for free with snapshots
+being content-addressible (storing the same block twice simply overwrites the
+old copy, without using any more storage), and the other comes with individual
+blocks being compressed. While block compression introduces extra complexity,
+it's worth it due to the large space savings that usually result.
 
-Snapshots are also append-only, which makes them great for preservation,
-although it does force a few compromises in the design that will be covered
-later.
-
-Also unlike Git and like most filesystems, a snapshot is structured as a series
-of fixed-sized (64 KB) blocks. Any entity bigger than a block will be split up
-among multiple blocks, which is why almost every kind of block has a "next
-pointer".
-
-(One note about these next pointers - they're the only place where the "empty
-hash" consisting of all zeroes is allowed. You can think of it as the NULL
-pointer at the end of a linked list)
-
+Despite blocks being compressed, each block logically contains 64KB worth of
+data. Since each block has a finite capacity, potentially large lists of things
+(like files in a commit) are structured as a list linked together with "next
+pointers." Like linked lists in memory, there is a "null pointer" which is
+represented as the all-zeroes hash.
 
 If you want to get an overview of the structure of a snapshot, you can use the
 `viz` subcommand, which will generate a dot file that you can render using the
@@ -97,20 +91,20 @@ this list.
 
 - An address is stored in ASCII hex form, taking up a total of 64 bytes.
   Although snapshot can deal with addresses in upper and lower case, all
-  addresses are internall stored as upper-case.
+  addresses are internally stored as upper-case.
   
 - In any case where non-hash strings are allowed (only file paths and tag names
   currently), those strings are stored zero-padded and encoded as UTF-8.
   
-- Integers are stored in binary, most significant byte first.
-
+- All integers are encoded in signed big-endian form.
+  
 ### Data Blocks
 
 Data blocks are the simplest kind of block, which contain 64 KB of arbitrary
 data. When you make a commit, the contents of the files in your working
 directory are stored into these blocks.
 
-If an entire block isn't used, then it's padded out to 64 KB for zeroes. The
+If an entire block isn't used, then it's padded out to 64 KB with zeroes. The
 snapshot file keeps track of the size elsewhere, so if the file is less than
 64 KB only the relevant part is extracted.
 
@@ -121,11 +115,15 @@ whole file. That's what file blocks are for.
 ### File Blocks
 
 ```text
-| data block addresses   [0]  |
-| data block addresses   [1]  |
-| ...                         |
-| data block addresses[1022]  |
-| previous file block address |
+0     16      32       48      64
++------|-------|--------|-------+
+| data block addresses [0]      |
+|-------------------------------|
+z ...                           z
+| data block addresses[1022]    |
+|-------------------------------|
+| previous file block address   |
++-------|-------|-------|-------+
 ```
 
 A file block is just a list of addresses to data blocks, and a link to the file
@@ -154,14 +152,21 @@ will be.
 ### Commit Data Blocks
 
 ```text
-| file path (4KB)     [0] |
-| file size (64-bit)  [0] |
-| file block pointer  [0] |
-| ...                     |
-| file path          [14] |
-| file size          [14] |
-| file block pointer [14] |
-| next commit data addr. |
+0     16      32       48      64
++------|-------|--------|-------+
+| file path (4KB text)      [0] |
+z ...                           z
+| file size (long)          [0] |
+| file block address        [0] |
+|-------------------------------|
+z ...                           z
+|-------------------------------|
+| file path                [14] |
+| file size                [14] |
+| file block address            |
+|-------------------------------|
+| next commit data address      |
++-------|-------|-------|-------+
 ```
 
 Commit data blocks contain references to all the files included in a commit.
@@ -182,30 +187,37 @@ to create them when restoring a snapshot, but otherwise they exist only in paths
 ### Commit Blocks
 
 ```text
-| ms since Unix epoch (64-bit) |
-| commit data address          |
-| previous commit address      |
+0     16      32       48      64
++------|-------|--------|-------+
+| UTC Unix millis (long)        |
+| commit data address           |
+| previous commit address       |
++-------|-------|-------|-------+
 ```
 
 Commits contain metadata about a commit, but mostly serve as a place to store
 addresses that provide both the file contents of the commit, and the history
 in the form of the previous commit.
 
-One thing worth noting is that commit blocks waste a lot of space, since they
-use a small fraction of the entire 64 KB of the block. It would be possible to
-pack multiple commits like we've seen with the other blocks so far, but that
-would make addressing a commit more complicated (since it would be necessary
-to know both the block the commit is in and its index in the block).
+Although it looks like a commit block wastes a lot of space, they always end up
+getting compressed and stored in much less than 64 KB. The main reason why this
+design was chosen was to make addressing a commit easier (if there are many
+commits in one block, then both the block and index have to be in the address). 
 
 ### Tag Blocks
 
 ```text
-| tag name (64 bytes) [0] |
-| address             [0] |
-| ...                     |
-| tag name          [510] |
-| address           [510] |
-| next tag address        |
+0     16      32       48      64
++------|-------|--------|-------+
+| tag name (text)           [0] |
+| commit address                |
+|-------------------------------|
+z ...                           z
+| tag name                [510] |
+| commit address                |
+|-------------------------------|
+| next tag address              |
++-------|-------|-------|-------+
 ```
 
 Tags are fairly straightforward, in that they're just alternative names for
@@ -220,22 +232,28 @@ That mapping is managed by index blocks.
 ### Index Blocks
 
 ```text
-| address              [0] |
-| offset in snapshot   [0] |
-| ...                      |
-| address            [510] |
-| offset in snapshot [510] |
-| next index address       |
+0     16      32       48      64
++------|-------|--------|-------+
+| block address             [0] |
+| first byte offset (long)      |
+| size (int)   | zipped (bool)  |
+|-------------------------------|
+z ...                           z
+|-------------------------------|
+| block address           [818] |
+| first byte offset (long)      |
+| size (int)   | zipped (bool)  |
+|-------------------------------|
+| next index address            |
++-------|-------|-------|-------+
 ```
 
 Index blocks are what ultimately make snapshots content-addressible: any time a
 block has to be loaded from the snapshot by its hash, the index is scanned for
 that hash. The offset associated with that address is where the data for that
-block is ultimately loaded from.
-
-(A minor point is that the offsets here are in terms of block offsets from the
-header, which means that offset 0 will be over 130 KB into the file, offset 1
-will be an additional 64 KB into the file, and so on)
+block is ultimately loaded from, and is measured in bytes from the start of the
+file. Also included is the compression status of the block so the decoder knows
+whether to decompress before unserializing the block.
 
 There are two big questions that come to mind with this structure:
 
@@ -252,9 +270,16 @@ There are two big questions that come to mind with this structure:
 ### The Header Block
 
 ```text
+0     16      32       48      64
++------|-------|--------|-------+
 | address of most recent commit |
+|-------------------------------|
 | root index block (inline)     |
+z ...                           z
+|-------------------------------|
 | root tag block (inline)       |
+z ...                           |
++-------|-------|-------|-------+
 ```
 
 As mentioned in the index block section, there has to be a way to determine
