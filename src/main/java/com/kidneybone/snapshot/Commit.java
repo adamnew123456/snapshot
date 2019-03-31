@@ -118,6 +118,8 @@ class Commit {
         FileBlock currentFileBlock = new FileBlock();
         long size;
 
+        System.out.printf("Storing file %s...\n", filePath);
+
         try {
             fileData = FileChannel.open(filePath, StandardOpenOption.READ);
             size = fileData.size();
@@ -143,6 +145,7 @@ class Commit {
             if (fileData != null) fileData.close();
         }
 
+        System.out.printf("    Done\n");
         return new FileInfo(_store.serializeBlock(currentFileBlock), size);
     }
 
@@ -155,6 +158,8 @@ class Commit {
         FileChannel fileData = null;
         FileBlock currentFileBlock = new FileBlock();
         _store.unserializeBlock(currentFileBlock, filePointer);
+
+        System.out.printf("Restoring file %s...\n", filePath);
 
         try {
             fileData = FileChannel.open(filePath, StandardOpenOption.WRITE, StandardOpenOption.CREATE);
@@ -196,5 +201,7 @@ class Commit {
         } finally {
             if (fileData != null) fileData.close();
         }
+
+        System.out.printf("    Done\n");
     }
 }

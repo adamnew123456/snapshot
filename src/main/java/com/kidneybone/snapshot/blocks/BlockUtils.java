@@ -15,7 +15,7 @@ public class BlockUtils {
      */
     public static String hashBlock(BasicBlock block) {
         ByteBuffer buffer = ByteBuffer.allocate(BasicBlock.BLOCK_SIZE_BYTES);
-        block.toBuffer(buffer);
+        block.serialize(buffer);
         return hashOfLastBlock(buffer);
     }
 
@@ -24,7 +24,7 @@ public class BlockUtils {
      * stream.
      */
     public static String hashOfLastBlock(ByteBuffer buffer) {
-        buffer.position(0);
+        buffer.flip();
         buffer.get(LAST_BLOCK_BUFFER);
 
         MessageDigest digest = null;
@@ -54,6 +54,7 @@ public class BlockUtils {
             }
         }
 
+        buffer.rewind();
         return digestString.toString();
     }
 

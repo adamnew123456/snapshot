@@ -9,19 +9,36 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.zip.DataFormatException;
+import java.util.zip.Deflater;
+import java.util.zip.Inflater;
 
 import com.kidneybone.snapshot.blocks.BasicBlock;
 import com.kidneybone.snapshot.blocks.CommitBlock;
 import com.kidneybone.snapshot.blocks.IndexBlock;
 import com.kidneybone.snapshot.blocks.TagBlock;
 
-public class BlockStore {
-    private static long HASH_IS_EMPTY = -1;
-    private static long HASH_NOT_FOUND = -2;
+class BlockLayout {
+    public final static BlockLayout NOT_FOUND = new BlockLayout("NOT-FOUND", 0, 0, false);
+    public final static BlockLayout EMPTY_HASH = new BlockLayout("EMPTY-HASH", 0, 0, false);
 
+    public final String hash;
+    public final int size;
+    public final long offset;
+    public final boolean isCompressed;
+
+    public BlockLayout(String hash, long offset, int size, boolean isCompressed) {
+        this.hash = hash;
+        this.offset = offset;
+        this.size = size;
+        this.isCompressed = isCompressed;
+    }
+}
+
+public class BlockStore {
     private FileChannel _channel;
     private HeaderBlock _header = new HeaderBlock();
-    private HashMap<String, Long> _indexCache = new HashMap<>();
+    private HashMap<String, BlockLayout> _indexCache = new HashMap<>();
 
     public BlockStore(FileChannel channel) {
         _channel = channel;
@@ -55,7 +72,7 @@ public class BlockStore {
         ByteBuffer headerBuffer = newHeaderBuffer();
         _header.serialize(headerBuffer);
 
-        headerBuffer.position(0);
+        headerBuffer.flip();
         _channel.write(headerBuffer, 0);
         _channel.force(true);
     }
@@ -68,7 +85,7 @@ public class BlockStore {
         _channel.position(0);
         _channel.read(headerBuffer, 0);
 
-        headerBuffer.position(0);
+        headerBuffer.flip();
         _header.unserialize(headerBuffer);
     }
 
@@ -106,8 +123,8 @@ public class BlockStore {
             throw new IllegalArgumentException("Tags cannot be empty or consist of only whitespace");
         }
 
-        long offset = getOffsetForHash(hash.toUpperCase());
-        if (offset == HASH_IS_EMPTY || offset == HASH_NOT_FOUND) {
+        BlockLayout info = getBlockLayoutForHash(hash.toUpperCase());
+        if (info == BlockLayout.EMPTY_HASH || info == BlockLayout.NOT_FOUND) {
             throw new IllegalArgumentException("The hash " + hash + " does not refer to a block");
         }
 
@@ -149,25 +166,62 @@ public class BlockStore {
      * block pool. Only writes the block if it isn't already stored.
      */
     public String serializeBlock(BasicBlock block) throws IOException {
+        return serializeBlockInternal(block, true).hash;
+    }
+
+    public BlockLayout serializeBlockInternal(BasicBlock block, boolean writeIndex) throws IOException {
         ByteBuffer blockBuffer = newBlockBuffer();
         block.serialize(blockBuffer);
         String hash = hashOfLastBlock(blockBuffer);
+        if (hash.equals(BasicBlock.EMPTY_HASH)) {
+            throw new IOException("Cannot serialize block whose hash is the empty hash");
+        }
 
-        long offset = getOffsetForHash(hash.toUpperCase());
-        if (offset == HASH_NOT_FOUND) {
+        BlockLayout info = getBlockLayoutForHash(hash.toUpperCase());
+        int writeSize = 0;
+        long offset = 0;
+        boolean isCompressed = false;
+
+        if (info == BlockLayout.NOT_FOUND) {
             IndexBlock index = _header.getRootIndex();
-            if (index.isFull()) {
+            if (writeIndex && index.isFull()) {
                 index = flushRootIndex();
             }
 
-            blockBuffer.position(0);
-            _channel.write(blockBuffer, _channel.size());
-            offset = getLastBlockOffset();
+            offset = getCurrenttBlockOffset();
+            int deflatedSize = 0;
 
-            index.registerBlock(hash, offset);
+            Deflater deflater = new Deflater();
+            deflater.setInput(blockBuffer);
+            deflater.finish();
+
+            ByteBuffer deflateBuffer = newBlockBuffer();
+            deflatedSize = deflater.deflate(deflateBuffer);
+
+            // We should only take the uncompressed form if the deflater
+            // couldn't fit the compressed form within a single block. This
+            // usually happens if we're storing something like a JPEG which is
+            // already compressed.
+            if (deflater.finished()) {
+                deflateBuffer.flip();
+                _channel.write(deflateBuffer, _channel.size());
+
+                writeSize = deflatedSize;
+                isCompressed = true;
+            } else {
+                blockBuffer.rewind();
+                _channel.write(blockBuffer, _channel.size());
+
+                writeSize = BasicBlock.BLOCK_SIZE_BYTES;
+                isCompressed = false;
+            }
+
+            if (writeIndex) {
+                index.registerBlock(hash, offset, writeSize, isCompressed);
+            }
         }
 
-        return hash;
+        return new BlockLayout(hash, offset, writeSize, isCompressed);
     }
 
     /**
@@ -183,17 +237,17 @@ public class BlockStore {
         rootIndex.serialize(indexBuffer);
 
         String hash = hashOfLastBlock(indexBuffer);
-        long offset = getOffsetForHash(hash.toUpperCase());
+        BlockLayout layout = serializeBlockInternal(rootIndex, false);
+        IndexBlock newRootIndex;
 
-        IndexBlock newRootIndex = _header.linkInNewIndexBlock(hash);
-
-        if (offset == HASH_NOT_FOUND) {
-            indexBuffer.position(0);
-            _channel.write(indexBuffer, _channel.size());
-            offset = getLastBlockOffset();
-            newRootIndex.registerBlock(hash, offset);
+        // If the hash was already written, we still have to copy it into the
+        // new index so that it can be resolved
+        if (layout.size == 0) {
+            layout = getBlockLayoutForHash(hash);
         }
 
+        newRootIndex = _header.linkInNewIndexBlock(hash);
+        newRootIndex.registerBlock(hash, layout.offset, layout.size, layout.isCompressed);
         return newRootIndex;
     }
 
@@ -219,31 +273,56 @@ public class BlockStore {
             throw new IllegalArgumentException(hash + " is not a valid SHA256 hash");
         }
 
-        long offset = getOffsetForHash(hash.toUpperCase());
-        if (offset == HASH_IS_EMPTY) {
+        BlockLayout info = getBlockLayoutForHash(hash.toUpperCase());
+        if (info == BlockLayout.EMPTY_HASH) {
             throw new IllegalArgumentException("Cannot retrieve block with empty hash");
-        } else if (offset == HASH_NOT_FOUND) {
+        } else if (info == BlockLayout.NOT_FOUND) {
             throw new IllegalArgumentException("Could not find block with hash " + hash);
         } else {
-            unserializeBlockAtOffset(block, offset);
+                unserializeBlockAtOffset(block, info.offset, info.size, info.isCompressed);
         }
     }
 
     /**
      * Returns the offset of the block most recently written to the store.
      */
-    private long getLastBlockOffset() throws IOException {
-        return ((_channel.size() - HeaderBlock.HEADER_SIZE_BYTES) / BasicBlock.BLOCK_SIZE_BYTES) - 1;
+    private long getCurrenttBlockOffset() throws IOException {
+        return _channel.size();
     }
 
     /**
      * Initializes the block with the block data at the given offset.
      */
-    private void unserializeBlockAtOffset(BasicBlock block, long offset) throws IOException {
+        private void unserializeBlockAtOffset(BasicBlock block, long offset, int size, boolean compressed) throws IOException {
         ByteBuffer blockBuffer = newBlockBuffer();
-        _channel.read(blockBuffer, HeaderBlock.HEADER_SIZE_BYTES + BasicBlock.BLOCK_SIZE_BYTES * offset);
 
-        blockBuffer.position(0);
+        if (compressed) {
+            ByteBuffer inflateBuffer = ByteBuffer.allocate(size);
+            _channel.read(inflateBuffer, offset);
+
+            inflateBuffer.flip();
+            Inflater inflater = new Inflater();
+            inflater.setInput(inflateBuffer);
+
+            try {
+                int blockSize = inflater.inflate(blockBuffer);
+                inflater.end();
+
+                if (blockSize != BasicBlock.BLOCK_SIZE_BYTES) {
+                    String error = String.format("Found %s block with size %d after decompression, should be %d",
+                                                block.getClass().getName(),
+                                                blockSize,
+                                                BasicBlock.BLOCK_SIZE_BYTES);
+                    throw new IOException(error);
+                }
+            } catch (DataFormatException err) {
+                throw new IOException("Failure when decoding compressed block: " + err.getMessage());
+            }
+        } else {
+            _channel.read(blockBuffer, offset);
+        }
+
+        blockBuffer.flip();
         block.unserialize(blockBuffer);
     }
 
@@ -252,9 +331,9 @@ public class BlockStore {
      * (in blocks from the end of the header) or the status codes HASH_IS_EMPTY
      *  or HASH_NOT_FOUND.
      */
-    private long getOffsetForHash(String hash) throws IOException {
+    private BlockLayout getBlockLayoutForHash(String hash) throws IOException {
         if (isEmptyHash(hash)) {
-            return HASH_IS_EMPTY;
+            return BlockLayout.EMPTY_HASH;
         } else if (_indexCache.containsKey(hash)) {
             return _indexCache.get(hash);
         } else {
@@ -272,25 +351,28 @@ public class BlockStore {
                 for (int i = 0; i < currentIndex.size(); i++) {
                     String currentHash = currentIndex.getEntryPointer(i);
                     long currentOffset = currentIndex.getEntryOffset(i);
-                    _indexCache.put(currentHash, currentOffset);
+                    int currentSize = currentIndex.getEntrySize(i);
+                    boolean currentIsCompressed = currentIndex.getEntryIsCompressed(i);
+                    BlockLayout info = new BlockLayout(hash, currentOffset, currentSize, currentIsCompressed);
+                    _indexCache.put(currentHash, info);
 
                     if (currentHash.equals(hash)) {
-                        return currentOffset;
+                        return info;
                     }
                 }
 
                 String nextIndex = currentIndex.getNextPointer();
-                long offset = getOffsetForHash(nextIndex);
+                BlockLayout indexInfo = getBlockLayoutForHash(nextIndex);
 
-                if (offset == HASH_IS_EMPTY) {
+                if (indexInfo == BlockLayout.EMPTY_HASH) {
                     currentIndex = null;
                 } else {
                     currentIndex = new IndexBlock();
-                    unserializeBlockAtOffset(currentIndex, offset);
+                    unserializeBlockAtOffset(currentIndex, indexInfo.offset, indexInfo.size, indexInfo.isCompressed);
                 }
             }
 
-            return HASH_NOT_FOUND;
+            return BlockLayout.NOT_FOUND;
         }
     }
 }

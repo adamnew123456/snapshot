@@ -52,13 +52,13 @@ public class HeaderBlock {
 
     public void serialize(ByteBuffer buffer) {
         writeHash(buffer, _lastCommit);
-        _rootIndex.toBuffer(buffer);
-        _rootTags.toBuffer(buffer);
+        _rootIndex.serialize(buffer);
+        _rootTags.serialize(buffer);
     }
 
     public void unserialize(ByteBuffer buffer) {
         _lastCommit = readHash(buffer);
-        _rootIndex.fromBuffer(buffer);
-        _rootTags.fromBuffer(buffer);
+        _rootIndex.unserialize(buffer);
+        _rootTags.unserialize(buffer);
     }
 }

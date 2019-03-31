@@ -120,7 +120,7 @@ public class Visualizer {
                           escapeHash(commitHash),
                           escapeGraphLabel(_dateFormatter.format(commitDate)),
                           escapeHash(commit.getDataPointer()),
-                          escapeGraphLabel(commit.getPreviousCommit()));
+                          escapeHash(commit.getPreviousCommit()));
 
         CommitDataBlock commitData = new CommitDataBlock();
         String lastCommitDataHash = commit.getDataPointer();
@@ -182,6 +182,9 @@ public class Visualizer {
             blockLabel.append(escapeHash(index.getEntryPointer(i)));
             blockLabel.append(" ").append("@ ");
             blockLabel.append(index.getEntryOffset(i));
+            if (index.getEntryIsCompressed(i)) {
+                blockLabel.append(" (zip)");
+            }
             blockLabel.append("}");
         }
 
